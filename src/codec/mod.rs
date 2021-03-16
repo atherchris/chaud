@@ -1,27 +1,23 @@
 //
-// Copyright (c) 2021 Christopher Atherton <atherchris@gmail.com>
+// Copyright (C) 2021 Christopher Atherton <atherchris@gmail.com>
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 
 pub mod wav;
 pub mod flac;
+pub mod vorbis;
 
 pub struct Frame {
 	pub channels : usize,
@@ -31,38 +27,40 @@ pub struct Frame {
 	pub samples : Vec<i32>,
 
 	pub eof : bool,
-	pub error : bool,
 }
 
 fn unpack_pcm(data: Vec<u8>, bits_per_sample: usize) -> Vec<i32> {
-    let mut pcm : Vec<i32> = Vec::with_capacity(data.len() / (bits_per_sample / 8));
+    let mut pcm = Vec::with_capacity(data.len() / (bits_per_sample / 8));
 
     if bits_per_sample == 8 {
-        for x in data {
-            pcm.push(x as i32);
+        for n in data {
+            pcm.push(n as i32);
         }
     } else if bits_per_sample == 16 {
         for n in 0..(data.len()/2) {
-            pcm.push(
-                (data[n*2] as i32) |
-                (data[n*2+1] as i32) << 8
+            pcm.push((
+                ((data[n*2] as i16) << 0) |
+                ((data[n*2+1] as i16) << 8))
+                as i32
             );
         }
     } else if bits_per_sample == 24 {
         for n in 0..(data.len()/3) {
-            pcm.push(
-                (data[n*3] as i32) |
-                (data[n*3+1] as i32) << 8 |
-                (data[n*3+2] as i32) << 16
+            pcm.push((
+                ((data[n*3] as i32) << 0) |
+                ((data[n*3+1] as i32) << 8) |
+                ((data[n*3+2] as i32) << 16))
+                as i32
             );
         }
     } else if bits_per_sample == 32 {
         for n in 0..(data.len()/4) {
-            pcm.push(
-                (data[n*4] as i32) |
-                (data[n*4+1] as i32) << 8 |
-                (data[n*4+2] as i32) << 16 |
-                (data[n*4+3] as i32) << 24
+            pcm.push((
+                ((data[n*4] as i32) << 0) |
+                ((data[n*4+1] as i32) << 8) |
+                ((data[n*4+2] as i32) << 16) |
+                ((data[n*4+3] as i32) << 24))
+                as i32
             );
         }
     } else {
@@ -73,7 +71,7 @@ fn unpack_pcm(data: Vec<u8>, bits_per_sample: usize) -> Vec<i32> {
 }
 
 fn pack_pcm(pcm: Vec<i32>, bits_per_sample: usize) -> Vec<u8> {
-    let mut data : Vec<u8> = Vec::with_capacity(pcm.len() * (bits_per_sample / 8));
+    let mut data = Vec::with_capacity(pcm.len() * (bits_per_sample / 8));
 
     if bits_per_sample == 8 {
         for n in pcm {
@@ -82,20 +80,20 @@ fn pack_pcm(pcm: Vec<i32>, bits_per_sample: usize) -> Vec<u8> {
     } else if bits_per_sample == 16 {
         for n in pcm {
             data.push(((n as u32) & 0x000000FF) as u8);
-            data.push(((n as u32) & 0x0000FF00 >> 8) as u8);
+            data.push((((n as u32) & 0x0000FF00) >> 8) as u8);
         }
     } else if bits_per_sample == 24 {
         for n in pcm {
             data.push(((n as u32) & 0x000000FF) as u8);
-            data.push(((n as u32) & 0x0000FF00 >> 8) as u8);
-            data.push(((n as u32) & 0x00FF0000 >> 16) as u8);
+            data.push((((n as u32) & 0x0000FF00) >> 8) as u8);
+            data.push((((n as u32) & 0x00FF0000) >> 16) as u8);
         }
     } else if bits_per_sample == 32 {
         for n in pcm {
             data.push(((n as u32) & 0x000000FF) as u8);
-            data.push(((n as u32) & 0x0000FF00 >> 8) as u8);
-            data.push(((n as u32) & 0x00FF0000 >> 16) as u8);
-            data.push(((n as u32) & 0xFF000000 >> 24) as u8);
+            data.push((((n as u32) & 0x0000FF00) >> 8) as u8);
+            data.push((((n as u32) & 0x00FF0000) >> 16) as u8);
+            data.push((((n as u32) & 0xFF000000) >> 24) as u8);
         }
     } else {
         panic!("Unsupported bits per sample");

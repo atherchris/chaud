@@ -1,23 +1,18 @@
 //
-// Copyright (c) 2021 Christopher Atherton <atherchris@gmail.com>
+// Copyright (C) 2021 Christopher Atherton <atherchris@gmail.com>
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 
 #![allow(non_camel_case_types)]
@@ -119,16 +114,17 @@ type FLAC__Frame = cty::c_void;
 
 type FLAC__StreamEncoder = cty::c_void;
 
-type FLAC__StreamDecoderWriteCallback =  unsafe extern "C" fn(*mut FLAC__StreamDecoder, *mut FLAC__Frame, *mut *mut FLAC__int32, tx: *mut cty::c_void) -> FLAC__StreamDecoderWriteStatus;
-type FLAC__StreamDecoderMetadataCallback = unsafe extern "C" fn(*mut FLAC__StreamDecoder, *mut FLAC__StreamMetadata, tx: *mut cty::c_void);
-type FLAC__StreamDecoderErrorCallback = unsafe extern "C" fn(*mut FLAC__StreamDecoder, FLAC__StreamDecoderErrorStatus, tx: *mut cty::c_void);
+type FLAC__StreamDecoderWriteCallback =  Option<extern "C" fn(*mut FLAC__StreamDecoder, *mut FLAC__Frame, *mut *mut FLAC__int32, tx: *mut cty::c_void) -> FLAC__StreamDecoderWriteStatus>;
+type FLAC__StreamDecoderMetadataCallback = Option<extern "C" fn(*mut FLAC__StreamDecoder, *mut FLAC__StreamMetadata, tx: *mut cty::c_void)>;
+type FLAC__StreamDecoderErrorCallback = Option<extern "C" fn(*mut FLAC__StreamDecoder, FLAC__StreamDecoderErrorStatus, tx: *mut cty::c_void)>;
 
-type FLAC__StreamEncoderProgressCallback = unsafe extern "C" fn(encoder: *mut FLAC__StreamEncoder,
-    bytes_writter: FLAC__uint64,
-    samples_written: FLAC__uint64,
-    frames_written: cty::c_uint,
-    total_frames_estimate: cty::c_uint,
-    client_data: *mut cty::c_void );
+type FLAC__StreamEncoderProgressCallback = Option<
+	extern "C" fn(encoder: *mut FLAC__StreamEncoder,
+    	bytes_writter: FLAC__uint64,
+    	samples_written: FLAC__uint64,
+    	frames_written: cty::c_uint,
+    	total_frames_estimate: cty::c_uint,
+    	client_data: *mut cty::c_void )>;
 
 extern "C" {
 
@@ -174,16 +170,16 @@ extern "C" fn write_callback(decoder: *mut FLAC__StreamDecoder, _frame: *mut FLA
 	let bits_per_sample = unsafe { FLAC__stream_decoder_get_bits_per_sample(decoder) } as usize;
 	let block_size = unsafe { FLAC__stream_decoder_get_blocksize(decoder) } as usize;
 
-	let frame_ch_vec = unsafe { std::slice::from_raw_parts(buffer as *mut *mut i32, channels).to_vec() };
-	let mut frame_vec = Vec::with_capacity(channels);
-	for ch in 0..channels {
-		frame_vec.push( unsafe { std::slice::from_raw_parts(frame_ch_vec[ch], block_size).to_vec() } );
+	let ch_index = unsafe { std::slice::from_raw_parts(buffer, channels) };
+	let mut block_vec : Vec<Vec<FLAC__int32>> = Vec::with_capacity(channels);
+	for i in 0..channels {
+		block_vec.push( unsafe { std::slice::from_raw_parts(ch_index[i], block_size).to_vec() } );
 	}
 
-	let mut samples : Vec<i32> = Vec::with_capacity(block_size * channels);
-	for n in 0..block_size {
+	let mut packed : Vec<i32> = Vec::with_capacity(block_size * channels);
+	for i in 0..block_size {
 		for ch in 0..channels {
-			samples.push(frame_vec[ch][n])
+			packed.push(block_vec[ch][i]);
 		}
 	}
 
@@ -191,9 +187,8 @@ extern "C" fn write_callback(decoder: *mut FLAC__StreamDecoder, _frame: *mut FLA
 		channels: channels,
 		sample_rate: sample_rate,
 		bits_per_sample: bits_per_sample,
-		samples: samples,
+		samples: packed,
 		eof: false,
-		error: false,
 	};
 
 	let p_tx = tx as *mut mpsc::Sender<Frame>;
@@ -203,26 +198,19 @@ extern "C" fn write_callback(decoder: *mut FLAC__StreamDecoder, _frame: *mut FLA
 }
 
 #[no_mangle]
-extern "C" fn metadata_callback(decoder: *mut FLAC__StreamDecoder, metadata: *mut FLAC__StreamMetadata, tx: *mut cty::c_void) {
+extern "C" fn metadata_callback(_decoder: *mut FLAC__StreamDecoder, _metadata: *mut FLAC__StreamMetadata, _tx: *mut cty::c_void) {
 }
 
 #[no_mangle]
 extern "C" fn error_callback(decoder: *mut FLAC__StreamDecoder, status: FLAC__StreamDecoderErrorStatus, tx: *mut cty::c_void) {
-	let frame = Frame {
-		channels: unsafe { FLAC__stream_decoder_get_channels(decoder) } as usize,
-		sample_rate: unsafe { FLAC__stream_decoder_get_sample_rate(decoder) } as usize,
-		bits_per_sample: unsafe { FLAC__stream_decoder_get_bits_per_sample(decoder) } as usize,
-		samples: Vec::new(),
-		eof: false,
-		error: true,
-	};
-	let p_tx = tx as *mut mpsc::Sender<Frame>;
-	unsafe { p_tx.as_ref().unwrap().send(frame).unwrap(); }
+	panic!("Error occured during FLAC decoding");
 }
 
 pub fn read_flac(path: &str, tx: mpsc::Sender<Frame>) {
     let decoder = unsafe { FLAC__stream_decoder_new() };
-    assert_eq!(decoder.is_null(), false, "Failed to create FLAC decoder");
+	if decoder.is_null() {
+		panic!("Failed to create FLAC decoder");
+	}
 
     let mut my_tx = tx;
     let mut p_tx = &mut my_tx as *mut mpsc::Sender<Frame>;
@@ -231,13 +219,19 @@ pub fn read_flac(path: &str, tx: mpsc::Sender<Frame>) {
 
     unsafe {
         let md5_ret = FLAC__stream_decoder_set_md5_checking(decoder, 1);
-        assert_eq!(md5_ret, 1, "Failed to set FLAC MD5 checksumming");
+		if md5_ret != 1 {
+			panic!("Failed to set FLAC MD5 checksuming");
+		}
 
-        let init_ret = FLAC__stream_decoder_init_file(decoder, cpath.as_ptr(), write_callback, metadata_callback, error_callback, p_tx as *mut cty::c_void);
-        assert_eq!(init_ret, FLAC__StreamDecoderInitStatus::FLAC__STREAM_DECODER_INIT_STATUS_OK, "Failed to initialize FLAC decoder" );
+        let init_ret = FLAC__stream_decoder_init_file(decoder, cpath.as_ptr(), Some(write_callback), Some(metadata_callback), Some(error_callback), p_tx as *mut cty::c_void);
+		if init_ret != FLAC__StreamDecoderInitStatus::FLAC__STREAM_DECODER_INIT_STATUS_OK {
+			panic!("Failed to initialize FLAC decoder");
+		}
 
         let decode_ret = FLAC__stream_decoder_process_until_end_of_stream(decoder);
-        assert_eq!(decode_ret, 1, "Error occurred during FLAC decoding");
+		if decode_ret != 1 {
+			panic!("Error occurred during decoding FLAC");
+		}
 	}
 
 	let frame = Frame {
@@ -246,7 +240,6 @@ pub fn read_flac(path: &str, tx: mpsc::Sender<Frame>) {
 		bits_per_sample: unsafe { FLAC__stream_decoder_get_bits_per_sample(decoder) } as usize,
 		samples: Vec::new(),
 		eof: true,
-		error: false,
 	};
 	my_tx.send(frame).unwrap();
 
@@ -257,41 +250,58 @@ pub fn read_flac(path: &str, tx: mpsc::Sender<Frame>) {
 }
 
 
-#[no_mangle]
-extern "C" fn progress_callback(encoder: *mut FLAC__StreamEncoder, bytes_writter: FLAC__uint64, samples_written: FLAC__uint64, frames_written: cty::c_uint, total_frames_estimate: cty::c_uint, client_data: *mut cty::c_void ) {
-}
 
 pub fn write_flac(path: &str, rx: mpsc::Receiver<Frame>) {
     let encoder = unsafe { FLAC__stream_encoder_new() };
-    assert_eq!(encoder.is_null(), false, "Failed to create FLAC encoder");
+	if encoder.is_null() {
+		panic!("Failed to create FLAC encoder");
+	}
 
     let cpath = CString::new(path).unwrap();
-    let initial_frame = rx.recv().unwrap();
+    let mut frame = rx.recv().unwrap();
 
     unsafe {
-        let channel_ret = FLAC__stream_encoder_set_channels(encoder, initial_frame.channels.try_into().unwrap());
-        assert_eq!(channel_ret, 1, "Failed to set FLAC channel count");
+        let channel_ret = FLAC__stream_encoder_set_channels(encoder, frame.channels.try_into().unwrap());
+		if channel_ret != 1 {
+			panic!("Failed to set FLAC channel count");
+		}
 
-        let bitspersample_ret = FLAC__stream_encoder_set_bits_per_sample(encoder, initial_frame.bits_per_sample.try_into().unwrap());
-        assert_eq!(bitspersample_ret, 1, "Failed to set FLAC bits per sample");
+        let bitspersample_ret = FLAC__stream_encoder_set_bits_per_sample(encoder, frame.bits_per_sample.try_into().unwrap());
+		if bitspersample_ret != 1 {
+			panic!("Failed to set FLAC bits per sample");
+		}
 
-        let samplerate_ret = FLAC__stream_encoder_set_sample_rate(encoder, initial_frame.sample_rate.try_into().unwrap());
-        assert_eq!(samplerate_ret, 1, "Failed to set FLAC sample rate");
+        let samplerate_ret = FLAC__stream_encoder_set_sample_rate(encoder, frame.sample_rate.try_into().unwrap());
+		if samplerate_ret != 1 {
+			panic!("Failed to set FLAC sample rate");
+		}
         
-        let init_ret = FLAC__stream_encoder_init_file(encoder, cpath.as_ptr(), progress_callback, std::ptr::null_mut());
-        assert_eq!(init_ret, FLAC__StreamEncoderInitStatus::FLAC__STREAM_ENCODER_INIT_STATUS_OK, "Failed to initialize FLAC encoder");
+        let init_ret = FLAC__stream_encoder_init_file(encoder, cpath.as_ptr(), None, std::ptr::null_mut());
+		if init_ret != FLAC__StreamEncoderInitStatus::FLAC__STREAM_ENCODER_INIT_STATUS_OK {
+			panic!("Failed to initialize FLAC encoder");
+		}
     }
 
-    let mut end = false;
-    while !end {
-        let frame = rx.recv().unwrap();
-        let process_ret = unsafe { FLAC__stream_encoder_process_interleaved(encoder, frame.samples.as_ptr(), (frame.samples.len() / frame.channels) as u32) };
-        end = frame.eof;
-    }
+	while ! frame.eof {
+		let process_ret = unsafe { FLAC__stream_encoder_process_interleaved(encoder, frame.samples.as_ptr(), (frame.samples.len() / frame.channels) as u32) };
+		if process_ret != 1 {
+			panic!("Error occurred while encoding FLAC");
+		}
+		frame = rx.recv().unwrap();
+	}
+
+	if frame.samples.len() > 0 {
+		let process_ret = unsafe { FLAC__stream_encoder_process_interleaved(encoder, frame.samples.as_ptr(), (frame.samples.len() / frame.channels) as u32) };
+		if process_ret != 1 {
+			panic!("Error occurred while encoding FLAC");
+		}
+	}
 
     unsafe {
-        FLAC__stream_encoder_finish(encoder);
+        let finish_ret = FLAC__stream_encoder_finish(encoder);
+		if finish_ret != 1 {
+			panic!("Failed to finish encoding FLAC");
+		}
         FLAC__stream_encoder_delete(encoder);
     }
 }
-
